@@ -11,6 +11,7 @@ app.use(express.json());
 
 const verifyJWT =  ( req, res, next) =>{
   const authorization = req.headers.authorization;
+  
   if (!authorization) {
     return  res.status(401).send({error: true, message: "Unauthorized access"})
   }
@@ -48,18 +49,35 @@ async function run() {
     const bistroCollectionDb = client.db("bistroDB").collection("menu");
     const bistroCollectionReviews = client.db("bistroDB").collection("reviews");
     const bistroCollectionCart = client.db("bistroDB").collection("carts");
+    const bistroCollectionPayments = client.db("bistroDB").collection("payments");
 
+   
     app.post('/jwt' , (req, res) => {
       const user = req.body;
-      const token = jwt.sign(user, process.env.WEB_SECRATE_TOKEN , {expiresIn: '12h' });
+      const token = jwt.sign(user, process.env.WEB_SECRATE_TOKEN ,  { expiresIn: '1h' });
+      console.log(token);
       res.send({token})
     })
 
     // user related apis
-    app.get("/users", async (req, res) => {
+    app.get("/users",   async (req, res) => {
       const result = await bistroCollectionUser.find().toArray();
       res.send(result);
     });
+
+    app.get('/users/admin/:email' , verifyJWT, async(req , res) => {
+      const email = req.params.email;
+
+      if (req.decoded.email !== email) {
+        res.send({admin: false})
+      }
+      const query = {email : email};
+
+
+      const user = await bistroCollectionUser.findOne(query);
+      const result = {admin : user?.role === 'admin'}
+      res.send(result)
+    })
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -94,6 +112,7 @@ async function run() {
       res.send(result);
     });
 
+
     // menu related apis
     app.get("/menu", async (req, res) => {
       const result = await bistroCollectionDb.find().toArray();
@@ -105,16 +124,21 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/carts", async (req, res) => {
+    app.get("/carts", verifyJWT,  async (req, res) => {
       const email = req.query.email;
       if (!email) {
         res.send([]);
       }
 
-      // const decodedEmail =  req.decoded.email;
-      // if ( email !== decodedEmail) {
-      //   return res.status(403).send({error: true , message: "Forbidden Access"})
-      // }
+      if (!email) {
+        res.send([]);
+      }
+
+      const decodedEmail = req.decoded.email;
+      if (email !== decodedEmail) {
+        return res.status(403).send({ error: true, message: 'forbidden access' })
+      }
+
 
       const query = { email: email };
       const result = await bistroCollectionCart.find(query).toArray();
@@ -136,12 +160,14 @@ async function run() {
     });
 
 
+// Payment related apis
 
 
     // Payment intent
     app.post('/create-payment-intent' , async(req, res) => {
       const { price } = req.body;
-        const amount = price * 100
+        const amount = price * 100;
+        console.log(price , amount);
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: "usd",
@@ -153,6 +179,28 @@ async function run() {
       });
     })
 
+
+    app.post('/payment' , async(req , res) => {
+      const completeTransition =  req.body;
+      const result =  await bistroCollectionPayments.insertOne(completeTransition);
+      res.send(result)
+    })
+
+    // admin stats
+
+    app.get('/admin-stats' , async(req, res) => {
+      const users =  await bistroCollectionUser.estimatedDocumentCount();
+      const products =  await bistroCollectionDb.estimatedDocumentCount();
+      const orders =  await bistroCollectionPayments.estimatedDocumentCount();
+      const payments =  await bistroCollectionPayments.find().toArray();
+      const revenue =  payments.reduce((sum , item) => sum + item.price , 0)
+      res.send({
+        users,
+        products,
+        orders,
+        revenue
+      })
+    })
 
 
     // Send a ping to confirm a successful connection
